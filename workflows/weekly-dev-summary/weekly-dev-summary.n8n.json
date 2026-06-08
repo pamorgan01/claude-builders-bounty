@@ -1,0 +1,365 @@
+{
+  "name": "Weekly Dev Summary",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                5
+              ],
+              "triggerAtHour": 17,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "weekly-schedule",
+      "name": "Weekly Friday Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -900,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "owner",
+              "name": "owner",
+              "type": "string",
+              "value": "={{ $env.GITHUB_OWNER || 'owner' }}"
+            },
+            {
+              "id": "repo",
+              "name": "repo",
+              "type": "string",
+              "value": "={{ $env.GITHUB_REPO || 'repo' }}"
+            },
+            {
+              "id": "language",
+              "name": "language",
+              "type": "string",
+              "value": "={{ $env.SUMMARY_LANGUAGE || 'EN' }}"
+            },
+            {
+              "id": "since",
+              "name": "since",
+              "type": "string",
+              "value": "={{ new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString() }}"
+            },
+            {
+              "id": "until",
+              "name": "until",
+              "type": "string",
+              "value": "={{ new Date().toISOString() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "config",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -700,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.owner }}/{{ $json.repo }}/commits",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "since",
+              "value": "={{ $json.since }}"
+            },
+            {
+              "name": "until",
+              "value": "={{ $json.until }}"
+            },
+            {
+              "name": "per_page",
+              "value": "100"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "n8n-weekly-dev-summary"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-commits",
+      "name": "Fetch Commits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -480,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $('Config').item.json.owner }}/{{ $('Config').item.json.repo }}/issues",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "state",
+              "value": "closed"
+            },
+            {
+              "name": "since",
+              "value": "={{ $('Config').item.json.since }}"
+            },
+            {
+              "name": "per_page",
+              "value": "100"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "n8n-weekly-dev-summary"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-closed-issues",
+      "name": "Fetch Closed Issues",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $('Config').item.json.owner }}/{{ $('Config').item.json.repo }}/pulls",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "state",
+              "value": "closed"
+            },
+            {
+              "name": "sort",
+              "value": "updated"
+            },
+            {
+              "name": "direction",
+              "value": "desc"
+            },
+            {
+              "name": "per_page",
+              "value": "100"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "n8n-weekly-dev-summary"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-prs",
+      "name": "Fetch Pull Requests",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -480,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const config = $('Config').first().json;\nconst commits = $('Fetch Commits').all().flatMap(item => Array.isArray(item.json) ? item.json : [item.json]);\nconst issues = $('Fetch Closed Issues').all().flatMap(item => Array.isArray(item.json) ? item.json : [item.json]).filter(item => !item.pull_request);\nconst prs = $('Fetch Pull Requests').all().flatMap(item => Array.isArray(item.json) ? item.json : [item.json]).filter(pr => pr.merged_at && new Date(pr.merged_at) >= new Date(config.since));\nconst compact = (items, fields) => items.slice(0, 25).map(item => Object.fromEntries(fields.map(field => [field, item[field] ?? null])));\nreturn [{ json: {\n  owner: config.owner,\n  repo: config.repo,\n  language: config.language,\n  since: config.since,\n  until: config.until,\n  commits: compact(commits, ['sha', 'html_url']).map((commit, index) => ({ ...commit, message: commits[index]?.commit?.message?.split('\\n')[0] ?? null, author: commits[index]?.commit?.author?.name ?? null })),\n  closedIssues: compact(issues, ['number', 'title', 'html_url', 'closed_at']),\n  mergedPullRequests: compact(prs, ['number', 'title', 'html_url', 'merged_at'])\n}}];"
+      },
+      "id": "aggregate-activity",
+      "name": "Aggregate Activity",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 1200,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Write a concise weekly narrative development summary in \" + $json.language + \" for repo \" + $json.owner + \"/\" + $json.repo + \". Include: 1) main engineering themes, 2) notable merged PRs, 3) closed issues, 4) risks or follow-ups. Use this activity JSON:\\n\" + JSON.stringify($json, null, 2)\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "generate-summary",
+      "name": "Generate Summary With Claude",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        20,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"content\": ($json.content && $json.content[0] && $json.content[0].text) ? $json.content[0].text : \"Weekly dev summary generated, but response body was empty.\"\n}",
+        "options": {}
+      },
+      "id": "post-discord",
+      "name": "Post To Discord",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Weekly Friday Schedule": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Fetch Commits",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Closed Issues",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Pull Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Commits": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Closed Issues": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Pull Requests": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Activity": {
+      "main": [
+        [
+          {
+            "node": "Generate Summary With Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Summary With Claude": {
+      "main": [
+        [
+          {
+            "node": "Post To Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2026-06-08T00:00:00.000Z",
+  "versionId": "weekly-dev-summary-v1"
+}
